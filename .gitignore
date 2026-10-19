@@ -4,3 +4,4 @@ node_modules/
 public/assets/app.js
 *.log
 .DS_Store
+public/assets/studio.js

@@ -1,10 +1,12 @@
 import { Hono } from 'hono';
 import { chapterOf, loadSite } from './db';
+import type { AccessEnv } from './studio/auth';
+import { studio } from './studio/routes';
 import { DrawingPage, NotFound } from './views/DrawingPage';
 import { Home } from './views/Home';
 import { NotebookPage } from './views/NotebookPage';
 
-type Env = { Bindings: { DB: D1Database; MEDIA: R2Bucket } };
+type Env = { Bindings: { DB: D1Database; MEDIA: R2Bucket } & AccessEnv };
 
 const app = new Hono<Env>();
 
@@ -56,6 +58,9 @@ app.get('/media/:key{.+}', async (c) => {
   headers.set('Cache-Control', 'public, max-age=31536000, immutable');
   return new Response(object.body, { headers });
 });
+
+// Noah's dashboard (behind Cloudflare Access).
+app.route('/studio', studio);
 
 app.notFound((c) => c.html(<NotFound />, 404));
 

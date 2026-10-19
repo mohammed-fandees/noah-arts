@@ -9,5 +9,5 @@
     "lib": ["ES2022", "DOM", "DOM.Iterable"],
     "types": []
   },
-  "include": ["src/client", "src/shared"]
+  "include": ["src/client", "src/studio", "src/shared"]
 }

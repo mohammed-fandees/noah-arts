@@ -47,6 +47,7 @@ export interface Chapter {
 }
 
 export interface Person {
+  id: number;
   slug: string;
   name: string;
   note: string | null;

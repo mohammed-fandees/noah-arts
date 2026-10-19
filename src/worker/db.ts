@@ -132,6 +132,7 @@ export async function loadSite(db: D1Database): Promise<Site> {
     appearances.set(a.person_id, list);
   }
   const people: Person[] = (peopleRes.results as PersonRow[]).map((r) => ({
+    id: r.id,
     slug: r.slug,
     name: r.name,
     note: r.note,

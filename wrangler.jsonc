@@ -17,5 +17,10 @@
   "r2_buckets": [
     { "binding": "MEDIA", "bucket_name": "noah-arts-media" }
   ],
+  // Cloudflare Access protects /studio. Fill these in from the Access application (see README).
+  "vars": {
+    "ACCESS_TEAM_DOMAIN": "",
+    "ACCESS_AUD": ""
+  },
   "observability": { "enabled": true }
 }
