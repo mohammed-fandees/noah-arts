@@ -1,0 +1,21 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "noah-arts",
+  "main": "src/worker/index.tsx",
+  "compatibility_date": "2026-10-01",
+  // Everything in public/ (styles, the client bundle) is served straight from Cloudflare's edge.
+  "assets": { "directory": "public" },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "noah-arts",
+      // Replace with the id printed by `npx wrangler d1 create noah-arts` before the first deploy.
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    { "binding": "MEDIA", "bucket_name": "noah-arts-media" }
+  ],
+  "observability": { "enabled": true }
+}
