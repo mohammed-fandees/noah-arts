@@ -5,6 +5,11 @@
   "compatibility_date": "2026-10-01",
   // Everything in public/ (styles, the client bundle) is served straight from Cloudflare's edge.
   "assets": { "directory": "public" },
+  // The site's custom domain. Wrangler creates the DNS record and certificate for this host.
+  "routes": [
+    { "pattern": "noah.fandees.tech", "custom_domain": true },
+    { "pattern": "admin.noah.fandees.tech", "custom_domain": true }
+  ],
   "d1_databases": [
     {
       "binding": "DB",
