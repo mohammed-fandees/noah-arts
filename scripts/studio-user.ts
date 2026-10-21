@@ -45,7 +45,8 @@ async function readPiped(): Promise<string> {
 
 let password: string;
 if (process.stdin.isTTY) {
-  password = await ask(`Password for ${username}: `);
+  console.log(`Choose a password for ${username} (at least 10 characters; typing is hidden).`);
+  password = await ask('Password: ');
   if ((await ask('Same password again: ')) !== password) {
     console.error('The passwords don’t match.');
     process.exit(1);

@@ -40,7 +40,7 @@ export async function verifyPassword(password: string, stored: string): Promise<
 }
 
 export function passwordProblem(password: string): string | null {
-  if (password.length < PASSWORD_MIN_LENGTH) return `Use at least ${PASSWORD_MIN_LENGTH} characters.`;
+  if (password.length < PASSWORD_MIN_LENGTH) return `The password needs at least ${PASSWORD_MIN_LENGTH} characters (the username can be as short as 3).`;
   if (password.length > 200) return 'That password is too long.';
   return null;
 }
