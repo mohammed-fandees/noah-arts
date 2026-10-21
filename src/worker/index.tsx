@@ -10,6 +10,16 @@ type Env = { Bindings: { DB: D1Database; MEDIA: R2Bucket } & AccessEnv };
 
 const app = new Hono<Env>();
 
+// admin.<domain> is the dashboard: its root and the public pages go straight to the studio.
+// /studio (the dashboard itself) and /media (the images it previews) are served as usual.
+const ADMIN_HOST = 'admin.noah.fandees.tech';
+app.use('*', async (c, next) => {
+  const url = new URL(c.req.url);
+  if (url.hostname !== ADMIN_HOST) return next();
+  if (url.pathname.startsWith('/studio') || url.pathname.startsWith('/media/')) return next();
+  return c.redirect('/studio/drawings');
+});
+
 // Pages are rendered from D1 on each request; a short edge cache keeps them fast
 // while new drawings from the dashboard still show up within a minute.
 const PAGE_CACHE = 'public, max-age=0, s-maxage=60, stale-while-revalidate=600';
