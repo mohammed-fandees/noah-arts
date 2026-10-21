@@ -1,30 +1,82 @@
 import { Hono, type Context } from 'hono';
 import { chapterOf, loadSite } from '../db';
 import { media } from '../views/parts';
-import { checkAccess, type AccessEnv } from './auth';
+import { changePassword, currentUser, hasAccounts, sessionCookie, signIn, signOut, type StudioUser } from './auth';
 import {
   deleteChapter, deleteDrawing, deletePerson, InputError, move, saveChapter, saveDrawing, savePerson, saveSettings, type StudioEnv
 } from './store';
-import { AccessPage, CastPage, ChaptersPage, DrawingsList, Editor, TextPage, type EditorData } from './views';
+import { AccountPage, CastPage, ChaptersPage, DrawingsList, Editor, LoginPage, TextPage, type EditorData } from './views';
 
-type Env = { Bindings: StudioEnv & AccessEnv };
+type Env = { Bindings: StudioEnv; Variables: { user: StudioUser } };
 
 export const studio = new Hono<Env>();
 
-// Every studio request must come through Cloudflare Access (verified here as well).
+/** Only same-site paths inside the studio are valid places to return to after signing in. */
+const safeNext = (next: string | null | undefined) =>
+  next && /^\/studio(\/[A-Za-z0-9/_-]*)?(\?[A-Za-z0-9=&%_.-]*)?$/.test(next) && !next.startsWith('/studio/login') ? next : '/studio/drawings';
+
 studio.use('*', async (c, next) => {
-  const access = await checkAccess(c.req.raw, c.env);
-  if (!access.ok) {
-    return c.html(<AccessPage reason={access.reason} />, access.reason === 'denied' ? 403 : 503);
-  }
-  // Writes only from the studio's own pages.
+  c.header('Cache-Control', 'no-store');
+  c.header('X-Robots-Tag', 'noindex');
+  c.header('X-Frame-Options', 'DENY');
+  // Writes (sign-in included) only from the studio's own pages.
   if (c.req.method !== 'GET' && c.req.method !== 'HEAD') {
     const origin = c.req.header('Origin');
     if (!origin || new URL(origin).host !== new URL(c.req.url).host) return c.text('Cross-site request refused.', 403);
   }
-  c.header('Cache-Control', 'no-store');
-  c.header('X-Robots-Tag', 'noindex');
+  if (c.req.path === '/studio/login') return next();
+  const user = await currentUser(c.env.DB, c.req.raw);
+  if (!user) {
+    if (c.req.path.startsWith('/studio/api/')) return c.json({ ok: false, error: 'You were signed out — sign in again in another tab, then retry.' }, 401);
+    const url = new URL(c.req.url);
+    return c.redirect(`/studio/login?next=${encodeURIComponent(url.pathname + url.search)}`);
+  }
+  c.set('user', user);
   await next();
+});
+
+// ---------- Signing in ----------
+
+studio.get('/login', async (c) => {
+  if (await currentUser(c.env.DB, c.req.raw)) return c.redirect(safeNext(c.req.query('next')));
+  return c.html(<LoginPage next={safeNext(c.req.query('next'))} noAccounts={!(await hasAccounts(c.env.DB))} />);
+});
+
+studio.post('/login', async (c) => {
+  const form = await c.req.formData();
+  const username = String(form.get('username') ?? '').trim().slice(0, 32);
+  const password = String(form.get('password') ?? '').slice(0, 200);
+  const next = safeNext(String(form.get('next') ?? ''));
+  const ip = c.req.header('CF-Connecting-IP') ?? 'local';
+  const result = await signIn(c.env.DB, username, password, ip);
+  if (!result.ok) {
+    const error =
+      result.reason === 'locked'
+        ? 'Too many tries. Wait 15 minutes, then try again.'
+        : 'That username and password don’t match.';
+    return c.html(<LoginPage next={next} error={error} noAccounts={false} />, result.reason === 'locked' ? 429 : 401);
+  }
+  c.header('Set-Cookie', sessionCookie(result.token, new URL(c.req.url).protocol === 'https:'));
+  return c.redirect(next);
+});
+
+studio.post('/logout', async (c) => {
+  await signOut(c.env.DB, c.req.raw);
+  c.header('Set-Cookie', sessionCookie('', new URL(c.req.url).protocol === 'https:', 0));
+  return c.redirect('/studio/login');
+});
+
+studio.get('/account', (c) =>
+  c.html(<AccountPage username={c.get('user').username} flash={c.req.query('saved') ? 'Password changed.' : null} error={c.req.query('error')} />)
+);
+
+studio.post('/account/password', async (c) => {
+  const form = await c.req.formData();
+  const error = await changePassword(
+    c.env.DB, c.req.raw, c.get('user'),
+    String(form.get('current') ?? ''), String(form.get('next') ?? ''), String(form.get('repeat') ?? '')
+  );
+  return c.redirect(error ? `/studio/account?error=${encodeURIComponent(error)}` : '/studio/account?saved=1');
 });
 
 const flashOf = (url: string) => new URL(url).searchParams.get('saved');

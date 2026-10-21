@@ -3,7 +3,7 @@ import type { Chapter, Drawing, Person, Settings } from '../../shared/types';
 import { JsonData, media } from '../views/parts';
 import { SETTING_FIELDS } from './store';
 
-type Section = 'drawings' | 'chapters' | 'cast' | 'text';
+type Section = 'drawings' | 'chapters' | 'cast' | 'text' | 'account';
 
 export const StudioLayout = ({ title, section, flash, error, script = false, children }: {
   title: string; section: Section; flash?: string | null; error?: string | null; script?: boolean; children: Child;
@@ -31,7 +31,11 @@ export const StudioLayout = ({ title, section, flash, error, script = false, chi
             <a href="/studio/cast" aria-current={section === 'cast' ? 'page' : undefined}>The cast</a>
             <a href="/studio/text" aria-current={section === 'text' ? 'page' : undefined}>Site text</a>
           </nav>
-          <a class="view-site" href="/" target="_blank" rel="noopener">View my site ↗</a>
+          <div class="side-foot">
+            <a class="view-site" href="/" target="_blank" rel="noopener">View my site ↗</a>
+            <a href="/studio/account" aria-current={section === 'account' ? 'page' : undefined}>Account</a>
+            <form method="post" action="/studio/logout"><button class="link">Sign out</button></form>
+          </div>
         </aside>
         <main class="main" id="main">
           {flash && <p class="flash" role="status">{flash}</p>}
@@ -43,30 +47,66 @@ export const StudioLayout = ({ title, section, flash, error, script = false, chi
   </html>
 );
 
-export const AccessPage = ({ reason }: { reason: 'not-configured' | 'denied' }) => (
+const Bare = ({ title, children }: { title: string; children: Child }) => (
   <html lang="en">
     <head>
       <meta charset="utf-8" />
       <meta name="viewport" content="width=device-width, initial-scale=1" />
       <meta name="robots" content="noindex" />
-      <title>Studio — Noah’s sketchbook</title>
+      <title>{title} — Noah’s studio</title>
+      <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+      <link rel="preconnect" href="https://fonts.googleapis.com" />
+      <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+      <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,500;12..96,700&family=IBM+Plex+Mono:wght@400;500&family=Reenie+Beanie&display=swap" />
       <link rel="stylesheet" href="/assets/studio.css" />
     </head>
-    <body>
-      <main class="locked">
-        <h1>The studio is locked.</h1>
-        {reason === 'not-configured' ? (
-          <p>
-            It opens once Cloudflare Access protects <code>/studio</code> and the Worker knows the Access team domain
-            and audience tag (<code>ACCESS_TEAM_DOMAIN</code>, <code>ACCESS_AUD</code>). See the README.
-          </p>
-        ) : (
-          <p>Sign in through Cloudflare Access with Noah’s email to open it.</p>
-        )}
-        <a href="/">Back to the sketchbook</a>
-      </main>
-    </body>
+    <body>{children}</body>
   </html>
+);
+
+export const LoginPage = ({ next, error, noAccounts }: { next: string; error?: string | null; noAccounts: boolean }) => (
+  <Bare title="Sign in">
+    <main class="login">
+      <p class="brand-big"><span class="hand">noah</span><span class="tag">STUDIO</span></p>
+      {noAccounts ? (
+        <div class="card">
+          <h1>No studio account yet.</h1>
+          <p class="hint">
+            Create one from the project folder: <code>npm run studio:user -- noah --remote</code> (it asks for the password). See the README.
+          </p>
+        </div>
+      ) : (
+        <form method="post" action="/studio/login" class="card login-form">
+          <h1>Welcome back.</h1>
+          {error && <p class="flash flash-error" role="alert">{error}</p>}
+          <input type="hidden" name="next" value={next} />
+          <label>Username<input name="username" autocomplete="username" required autofocus maxlength={32} /></label>
+          <label>Password<input name="password" type="password" autocomplete="current-password" required maxlength={200} /></label>
+          <button class="button primary big">Sign in</button>
+        </form>
+      )}
+      <a class="muted" href="/">← back to the sketchbook</a>
+    </main>
+  </Bare>
+);
+
+export const AccountPage = ({ username, flash, error }: { username: string; flash?: string | null; error?: string | null }) => (
+  <StudioLayout title="Account" section="account" flash={flash} error={error}>
+    <div class="head">
+      <div>
+        <p class="kicker">Account</p>
+        <h1>Signed in as {username}</h1>
+      </div>
+    </div>
+    <form method="post" action="/studio/account/password" class="card text-form narrow-form">
+      <h2>Change your password</h2>
+      <label>Current password<input name="current" type="password" autocomplete="current-password" required /></label>
+      <label>New password <span class="optional">at least 10 characters</span><input name="next" type="password" autocomplete="new-password" required minlength={10} /></label>
+      <label>New password, again<input name="repeat" type="password" autocomplete="new-password" required minlength={10} /></label>
+      <button class="button primary">Change password</button>
+      <p class="hint">Other browsers signed in to this account are signed out.</p>
+    </form>
+  </StudioLayout>
 );
 
 export const DrawingsList = ({ drawings, flash }: { drawings: Drawing[]; flash?: string | null }) => (

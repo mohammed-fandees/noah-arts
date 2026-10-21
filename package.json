@@ -8,13 +8,15 @@
     "deploy": "npm run build && wrangler deploy",
     "seed:local": "bash scripts/seed.sh --local",
     "seed:remote": "bash scripts/seed.sh --remote",
-    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.client.json"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.client.json && tsc --noEmit -p tsconfig.scripts.json",
+    "studio:user": "esbuild scripts/studio-user.ts --bundle --platform=node --format=esm --outfile=.wrangler/studio-user.mjs --log-level=warning && node .wrangler/studio-user.mjs"
   },
   "dependencies": {
     "hono": "^4.13.13"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261001.0",
+    "@types/node": "^22.20.5",
     "esbuild": "^0.28.2",
     "typescript": "^5.9.3",
     "wrangler": "^4.151.2"

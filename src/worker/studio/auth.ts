@@ -1,68 +1,124 @@
-// The studio sits behind Cloudflare Access: Access signs every request it lets through
-// with a JWT (Cf-Access-Jwt-Assertion). We verify it here too, so the studio stays closed
-// even if the Access application is misconfigured or removed.
+import { hashPassword, passwordProblem, verifyPassword } from '../../shared/password';
 
-export interface AccessEnv {
-  ACCESS_TEAM_DOMAIN?: string; // e.g. "noah.cloudflareaccess.com"
-  ACCESS_AUD?: string; // the Access application's "Application Audience (AUD) tag"
-  DEV_STUDIO_OPEN?: string; // "1" only in .dev.vars, for `wrangler dev`
+// Studio sign-in: username + password (accounts are created with `npm run studio:user`).
+// A session is a random token in an HttpOnly cookie; D1 keeps only its SHA-256, so a
+// leaked database can't be replayed as a login.
+
+export const SESSION_COOKIE = 'noah_studio';
+const SESSION_SECONDS = 30 * 24 * 60 * 60;
+// Per IP the limit is tight; per username it is looser, so a stranger can't easily
+// lock Noah out by typing wrong passwords for her username.
+const MAX_FAILURES_IP = 10;
+const MAX_FAILURES_USER = 50;
+const FAILURE_WINDOW = 15 * 60;
+
+export interface StudioUser {
+  id: number;
+  username: string;
 }
 
-export type AccessResult = { ok: true; email: string } | { ok: false; reason: 'not-configured' | 'denied' };
+const now = () => Math.floor(Date.now() / 1000);
 
-interface Jwk extends JsonWebKey {
-  kid: string;
+async function sha256(text: string): Promise<string> {
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(digest), (b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-let certCache: { team: string; keys: Jwk[]; until: number } | null = null;
-
-async function accessKeys(team: string): Promise<Jwk[]> {
-  if (certCache && certCache.team === team && certCache.until > Date.now()) return certCache.keys;
-  const res = await fetch(`https://${team}/cdn-cgi/access/certs`);
-  if (!res.ok) throw new Error(`Access certs: ${res.status}`);
-  const body = (await res.json()) as { keys: Jwk[] };
-  certCache = { team, keys: body.keys, until: Date.now() + 60 * 60 * 1000 };
-  return body.keys;
-}
-
-const b64url = (s: string) => Uint8Array.from(atob(s.replace(/-/g, '+').replace(/_/g, '/')), (c) => c.charCodeAt(0));
-const json = (s: string) => JSON.parse(new TextDecoder().decode(b64url(s)));
-
-function tokenFrom(req: Request): string | null {
-  const header = req.headers.get('Cf-Access-Jwt-Assertion');
-  if (header) return header;
+function cookieToken(req: Request): string | null {
   const cookie = req.headers.get('Cookie') ?? '';
-  const match = cookie.match(/(?:^|;\s*)CF_Authorization=([^;]+)/);
+  const match = cookie.match(new RegExp(`(?:^|;\\s*)${SESSION_COOKIE}=([A-Za-z0-9_-]{20,100})`));
   return match ? match[1] : null;
 }
 
-export async function checkAccess(req: Request, env: AccessEnv): Promise<AccessResult> {
-  if (env.DEV_STUDIO_OPEN === '1') {
-    const host = new URL(req.url).hostname;
-    if (host === 'localhost' || host === '127.0.0.1') return { ok: true, email: 'local@dev' };
-  }
-  const team = env.ACCESS_TEAM_DOMAIN?.trim();
-  const aud = env.ACCESS_AUD?.trim();
-  if (!team || !aud) return { ok: false, reason: 'not-configured' };
+export function sessionCookie(token: string, secure: boolean, maxAge = SESSION_SECONDS): string {
+  return `${SESSION_COOKIE}=${token}; Path=/studio; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${secure ? '; Secure' : ''}`;
+}
 
-  const token = tokenFrom(req);
-  if (!token) return { ok: false, reason: 'denied' };
-  try {
-    const [h, p, s] = token.split('.');
-    const header = json(h) as { alg: string; kid: string };
-    const payload = json(p) as { aud: string | string[]; exp: number; nbf?: number; iss: string; email?: string };
-    if (header.alg !== 'RS256') return { ok: false, reason: 'denied' };
-    const jwk = (await accessKeys(team)).find((k) => k.kid === header.kid);
-    if (!jwk) return { ok: false, reason: 'denied' };
-    const key = await crypto.subtle.importKey('jwk', jwk, { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, false, ['verify']);
-    const valid = await crypto.subtle.verify('RSASSA-PKCS1-v1_5', key, b64url(s), new TextEncoder().encode(`${h}.${p}`));
-    const now = Math.floor(Date.now() / 1000);
-    const audOk = Array.isArray(payload.aud) ? payload.aud.includes(aud) : payload.aud === aud;
-    if (!valid || !audOk || payload.exp < now || (payload.nbf ?? 0) > now + 60 || payload.iss !== `https://${team}`) {
-      return { ok: false, reason: 'denied' };
-    }
-    return { ok: true, email: payload.email ?? 'studio' };
-  } catch {
-    return { ok: false, reason: 'denied' };
+export async function currentUser(db: D1Database, req: Request): Promise<StudioUser | null> {
+  const token = cookieToken(req);
+  if (!token) return null;
+  return db
+    .prepare(
+      `SELECT u.id, u.username FROM studio_sessions s JOIN studio_users u ON u.id = s.user_id
+       WHERE s.token_hash = ? AND s.expires_at > ?`
+    )
+    .bind(await sha256(token), now())
+    .first<StudioUser>();
+}
+
+export async function hasAccounts(db: D1Database): Promise<boolean> {
+  return !!(await db.prepare('SELECT 1 FROM studio_users LIMIT 1').first());
+}
+
+// A hash of nothing in particular: unknown usernames still pay for one PBKDF2 run,
+// so response times don't reveal which usernames exist.
+let decoy: Promise<string> | null = null;
+
+export type SignIn = { ok: true; token: string } | { ok: false; reason: 'invalid' | 'locked' };
+
+export async function signIn(db: D1Database, username: string, password: string, ip: string): Promise<SignIn> {
+  const keys = [`ip:${ip}`, `user:${username.toLowerCase()}`];
+  const t = now();
+  const blocked = await db
+    .prepare(
+      `SELECT 1 FROM studio_login_failures
+       WHERE window_start > ? AND ((key = ? AND count >= ?) OR (key = ? AND count >= ?))`
+    )
+    .bind(t - FAILURE_WINDOW, keys[0], MAX_FAILURES_IP, keys[1], MAX_FAILURES_USER)
+    .first();
+  if (blocked) return { ok: false, reason: 'locked' };
+
+  const user = await db
+    .prepare('SELECT id, password_hash FROM studio_users WHERE username = ?')
+    .bind(username)
+    .first<{ id: number; password_hash: string }>();
+  decoy ??= hashPassword('decoy password, never used');
+  const valid = await verifyPassword(password, user?.password_hash ?? (await decoy));
+
+  if (!user || !valid) {
+    await db.batch(
+      keys.map((key) =>
+        db
+          .prepare(
+            `INSERT INTO studio_login_failures (key, count, window_start) VALUES (?, 1, ?)
+             ON CONFLICT (key) DO UPDATE SET
+               count = CASE WHEN window_start <= ? THEN 1 ELSE count + 1 END,
+               window_start = CASE WHEN window_start <= ? THEN excluded.window_start ELSE window_start END`
+          )
+          .bind(key, t, t - FAILURE_WINDOW, t - FAILURE_WINDOW)
+      )
+    );
+    return { ok: false, reason: 'invalid' };
   }
+
+  const token = btoa(String.fromCharCode(...crypto.getRandomValues(new Uint8Array(32))))
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
+  await db.batch([
+    db.prepare('DELETE FROM studio_login_failures WHERE key IN (?, ?)').bind(keys[0], keys[1]),
+    db.prepare('DELETE FROM studio_sessions WHERE expires_at <= ?').bind(t),
+    db.prepare('INSERT INTO studio_sessions (token_hash, user_id, expires_at) VALUES (?, ?, ?)').bind(await sha256(token), user.id, t + SESSION_SECONDS)
+  ]);
+  return { ok: true, token };
+}
+
+export async function signOut(db: D1Database, req: Request) {
+  const token = cookieToken(req);
+  if (token) await db.prepare('DELETE FROM studio_sessions WHERE token_hash = ?').bind(await sha256(token)).run();
+}
+
+/** Changes the password and signs out every other browser. Returns an error message, or null. */
+export async function changePassword(db: D1Database, req: Request, user: StudioUser, current: string, next: string, repeat: string) {
+  const row = await db.prepare('SELECT password_hash FROM studio_users WHERE id = ?').bind(user.id).first<{ password_hash: string }>();
+  if (!row || !(await verifyPassword(current, row.password_hash))) return 'Your current password isn’t right.';
+  if (next !== repeat) return 'The two new passwords don’t match.';
+  const problem = passwordProblem(next);
+  if (problem) return problem;
+  const keep = await sha256(cookieToken(req) ?? '');
+  await db.batch([
+    db.prepare('UPDATE studio_users SET password_hash = ? WHERE id = ?').bind(await hashPassword(next), user.id),
+    db.prepare('DELETE FROM studio_sessions WHERE user_id = ? AND token_hash <> ?').bind(user.id, keep)
+  ]);
+  return null;
 }

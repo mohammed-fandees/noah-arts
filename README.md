@@ -13,7 +13,7 @@ Runs entirely on Cloudflare:
 | Styles, client script (`public/`) | **Workers static assets** |
 | Drawings, chapters, the cast, site text | **D1** (SQLite) — schema in `migrations/` |
 | Her images | **R2**, served from `/media/<key>` |
-| Studio login | **Cloudflare Access** |
+| Studio login | Username + password, sessions in **D1** |
 
 ## What's on the site
 
@@ -64,16 +64,23 @@ Noah's dashboard. Everything happens in her browser before anything is uploaded:
 
 Saving is one D1 transaction; images go to R2 under fresh keys, and replaced files are deleted afterwards.
 
-### Locking it with Cloudflare Access
+### Signing in
 
-The studio refuses every request until Access is set up (it verifies the Access JWT itself too, so it stays closed even if the Access app is removed).
+The studio has its own username + password, so nobody needs a Cloudflare account to use it.
 
-1. Cloudflare dashboard → **Zero Trust → Access → Applications → Add an application → Self-hosted**.
-2. Application domain: your site's domain with path `studio` (for a `*.workers.dev` address, turn on Cloudflare Access in the Worker's *Domains & Routes* settings instead).
-3. Policy: **Allow**, *Emails* → Noah's email (and yours).
-4. Copy the application's **Audience (AUD) tag** and your team domain (`<team>.cloudflareaccess.com`) into `ACCESS_AUD` and `ACCESS_TEAM_DOMAIN` in `wrangler.jsonc`, then `npm run deploy`.
+```bash
+npm run studio:user -- noah --remote     # create the account (or reset its password) on the live site
+npm run studio:user -- noah --local      # the same for `npm run dev`
+```
 
-For local development, `cp .dev.vars.example .dev.vars` opens the studio on `localhost` only.
+It asks for the password twice (at least 10 characters) and stores only a PBKDF2-SHA256 hash.
+Then sign in at `/studio`. Noah can change her password under **Account**; doing so signs out
+every other browser.
+
+- Sessions are a random token in an HttpOnly, SameSite=Lax cookie scoped to `/studio`; D1 keeps only its SHA-256. They last 30 days, and **Sign out** ends them.
+- Ten wrong passwords from one IP lock that IP out for 15 minutes (fifty per username, so nobody can easily lock Noah out).
+- Every studio form and upload must come from the studio's own pages (Origin check).
+- With no accounts yet, `/studio` shows how to create one and nothing else.
 
 ## Preparing images by hand
 

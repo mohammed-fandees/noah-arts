@@ -1,2 +1,0 @@
-# Copy to .dev.vars for `npm run dev`: opens /studio on localhost without Cloudflare Access.
-DEV_STUDIO_OPEN=1
