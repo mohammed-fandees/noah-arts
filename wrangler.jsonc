@@ -10,7 +10,7 @@
       "binding": "DB",
       "database_name": "noah-arts",
       // Replace with the id printed by `npx wrangler d1 create noah-arts` before the first deploy.
-      "database_id": "00000000-0000-0000-0000-000000000000",
+      "database_id": "a4227ec3-b351-407b-a18c-45639012003d",
       "migrations_dir": "migrations"
     }
   ],
